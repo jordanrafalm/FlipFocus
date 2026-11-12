@@ -1,0 +1,32 @@
+[versions]
+kotlin = "2.2.21"
+compose = "1.10.1"
+agp = "8.10.0"
+google-services = "4.4.2"
+coroutines = "1.10.2"
+serialization = "1.8.1"
+datetime = "0.7.1"
+firebase = "2.7.0"
+
+[libraries]
+coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "coroutines" }
+coroutines-test = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-test", version.ref = "coroutines" }
+serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "serialization" }
+datetime = { module = "org.jetbrains.kotlinx:kotlinx-datetime", version.ref = "datetime" }
+firebase-app = { module = "dev.gitlive:firebase-app", version.ref = "firebase" }
+firebase-auth = { module = "dev.gitlive:firebase-auth", version.ref = "firebase" }
+firebase-firestore = { module = "dev.gitlive:firebase-firestore", version.ref = "firebase" }
+android-activity-compose = { module = "androidx.activity:activity-compose", version = "1.10.1" }
+android-core = { module = "androidx.core:core-ktx", version = "1.16.0" }
+android-credentials = { module = "androidx.credentials:credentials", version = "1.5.0" }
+android-credentials-play-services = { module = "androidx.credentials:credentials-play-services-auth", version = "1.5.0" }
+android-googleid = { module = "com.google.android.libraries.identity.googleid:googleid", version = "1.1.1" }
+
+[plugins]
+kotlin-multiplatform = { id = "org.jetbrains.kotlin.multiplatform", version.ref = "kotlin" }
+kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }
+kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
+compose = { id = "org.jetbrains.compose", version.ref = "compose" }
+android-application = { id = "com.android.application", version.ref = "agp" }
+android-library = { id = "com.android.library", version.ref = "agp" }
+google-services = { id = "com.google.gms.google-services", version.ref = "google-services" }

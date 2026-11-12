@@ -61,12 +61,12 @@ kotlin {
 
 android {
     namespace = "pl.flipfocus.app"
-    compileSdk = 35
+    compileSdk = 36
     defaultConfig {
         applicationId = "pl.flipfocus.app"
         minSdk = 26
-        targetSdk = 35
-        versionCode = 3
+        targetSdk = 36
+        versionCode = 4
         versionName = "0.1.1"
         buildConfigField("String", "GOOGLE_WEB_CLIENT_ID", "\"$googleWebClientId\"")
     }

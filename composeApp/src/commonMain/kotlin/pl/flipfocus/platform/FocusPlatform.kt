@@ -17,6 +17,7 @@ interface FocusPlatform {
     fun keepScreenAwake(enabled: Boolean) = Unit
     suspend fun setRemindersEnabled(enabled: Boolean, hour: Int = 11): ReminderPermission
     fun feedback(kind: FeedbackKind, sound: Boolean, haptics: Boolean)
+    fun playSound(sound: ByteArray?) = Unit
     fun shareText(text: String)
     fun shareExport(content: String, fileName: String) = shareText(content)
     fun openSystemSettings()

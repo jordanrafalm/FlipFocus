@@ -15,6 +15,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import platform.AudioToolbox.AudioServicesPlaySystemSound
+import platform.AVFAudio.AVAudioPlayer
 import platform.CoreMotion.CMMotionManager
 import platform.Foundation.*
 import platform.UIKit.*
@@ -46,6 +47,7 @@ class IosFocusPlatform : FocusPlatform {
     private var running = false
     private var lastSample = 0L
     private var gravity: DoubleArray? = null
+    private var soundPlayer: AVAudioPlayer? = null
     private val notifications = NSNotificationCenter.defaultCenter
     private val observers = listOf(
         notifications.addObserverForName(UIApplicationDidBecomeActiveNotification, null, NSOperationQueue.mainQueue) {
@@ -161,6 +163,19 @@ class IosFocusPlatform : FocusPlatform {
         if (sound) AudioServicesPlaySystemSound(if (kind == FeedbackKind.COMPLETED) 1057u else 1104u)
     }
 
+    override fun playSound(sound: ByteArray?) {
+        soundPlayer?.stop()
+        soundPlayer = null
+        if (sound == null) return
+        sound.usePinned { pinned ->
+            val data = NSData.create(bytes = pinned.addressOf(0), length = sound.size.toULong()) ?: return
+            soundPlayer = AVAudioPlayer(data = data, error = null).apply {
+                volume = 0.5f
+                play()
+            }
+        }
+    }
+
     override fun shareText(text: String) {
         presentShare(listOf(text))
     }
@@ -218,6 +233,7 @@ class IosFocusPlatform : FocusPlatform {
     }
 
     override fun dispose() {
+        playSound(null)
         stopMonitoring()
         keepScreenAwake(false)
         observers.forEach(notifications::removeObserver)

@@ -27,6 +27,7 @@ sealed interface SocialIntent {
     data class Connect(val endpoint: String, val nickname: String, val privacyAccepted: Boolean,
         val existingToken: String? = null, val timezone: String = "UTC") : SocialIntent
     data class SearchCompanies(val endpoint: String, val query: String) : SocialIntent
+    data class CreateCompany(val name: String) : SocialIntent
     data class ConnectCompany(val endpoint: String, val companyId: String, val nickname: String, val jobTitle: String = "",
         val privacyAccepted: Boolean, val companyRankingOptIn: Boolean = false, val timezone: String = "UTC") : SocialIntent
     data class SelectRoom(val roomId: String) : SocialIntent
@@ -36,6 +37,7 @@ sealed interface SocialIntent {
     data class PreviewInvitation(val code: String) : SocialIntent
     data class JoinInvitation(val privacyAccepted: Boolean) : SocialIntent
     data class UpdateProfile(val profile: SocialProfile) : SocialIntent
+    data class SelectCompany(val companyId: String) : SocialIntent
     data class LinkEmailPassword(val email: String, val password: String) : SocialIntent
     data class LinkGoogle(val idToken: String, val accessToken: String? = null) : SocialIntent
     data object LeaveCompany : SocialIntent

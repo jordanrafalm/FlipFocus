@@ -42,14 +42,14 @@ class ProgressCalculatorTest {
         assertEquals(2, ProgressCalculator.calendar(history, zone).size)
     }
 
-    @Test fun abortedAndShortSessionsNeverQualifyForStreak() {
+    @Test fun completedShortSessionsQualifyButAbortedSessionsDoNot() {
         val history = listOf(entry("short", "2026-09-21T10:00:00Z", minutes = 10),
             entry("cancel", "2026-09-21T12:00:00Z", completed = false))
         val progress = ProgressCalculator.calculate(history, LocalDate(2026, 9, 21), zone)
         assertEquals(10 * 60_000L, progress.totalFocusedMillis)
         assertEquals(1, progress.completedSessions)
-        assertFalse(progress.qualifiesForStreak)
-        assertEquals(0, progress.currentStreakDays)
+        kotlin.test.assertTrue(progress.qualifiesForStreak)
+        assertEquals(1, progress.currentStreakDays)
     }
 
     @Test fun multipleCompletionsAndDuplicatesCountCorrectly() {

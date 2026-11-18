@@ -51,8 +51,27 @@ class FirebaseSocialRepository : SocialRepository {
         SocialConnection(ENDPOINT, profile)
     }
 
-    override suspend fun searchCompanies(endpoint: String, query: String): List<Company> =
-        LocalCompanyDirectory.search(query)
+    override suspend fun searchCompanies(endpoint: String, query: String): List<Company> = guarded {
+        val local = LocalCompanyDirectory.search(query)
+        val custom = if (auth.currentUser != null) {
+            db.collection(COMPANIES).limit(100).get().documents
+                .map { Company(it.id, it.data(CompanyDoc.serializer()).name) }
+                .filter { query.isBlank() || it.name.contains(query, ignoreCase = true) }
+        } else emptyList()
+        (custom + local).distinctBy { it.id }.sortedBy { it.name.lowercase() }
+    }
+
+    override suspend fun createCompany(name: String): SocialConnection = guarded {
+        val companyName = name.trim()
+        if (companyName.length !in 2..80) throw SocialException("invalid_company_name")
+        val uid = ensureSignedIn()
+        val companyId = "custom_${Uuid.random().toHexString()}"
+        db.collection(COMPANIES).document(companyId)
+            .set(CompanyDoc.serializer(), CompanyDoc(companyName, uid))
+        val existing = readProfileOrNull(uid)
+        val nickname = existing?.nickname?.takeIf { it.isNotBlank() } ?: companyName
+        connectCompany(ENDPOINT, companyId, nickname, "", TimeZone.UTC.id, true, true)
+    }
 
     override suspend fun connectCompany(
         endpoint: String, companyId: String, nickname: String, jobTitle: String,
@@ -63,16 +82,29 @@ class FirebaseSocialRepository : SocialRepository {
         val title = jobTitle.trim()
         if (name.length !in 1..40) throw SocialException("invalid_nickname")
         if (title.length > 80) throw SocialException("invalid_job_title")
-        val company = LocalCompanyDirectory.byId(companyId) ?: throw SocialException("company_not_found")
+        val company = LocalCompanyDirectory.byId(companyId) ?: run {
+            val snapshot = db.collection(COMPANIES).document(companyId).get()
+            if (!snapshot.exists) throw SocialException("company_not_found")
+            Company(companyId, snapshot.data(CompanyDoc.serializer()).name)
+        }
         val uid = ensureSignedIn()
         val existing = readProfileOrNull(uid)
+        val membership = CompanyMembership(company.id, company.name, title.ifEmpty { null }, companyRankingOptIn)
+        val memberships = existing?.companyMemberships
+            .orEmpty()
+            .let { current -> if (existing != null && current.isEmpty() && existing.companyId != null) {
+                current + CompanyMembership(existing.companyId!!, existing.companyName ?: existing.companyId!!,
+                    existing.jobTitle, existing.companyRankingOptIn)
+            } else current }
+            .filterNot { it.id == company.id } + membership
         val profile = existing?.copy(
             nickname = name, timezone = timezone, companyId = company.id, companyName = company.name,
             jobTitle = title.ifEmpty { null }, companyRankingOptIn = companyRankingOptIn,
+            companyMemberships = memberships,
         ) ?: SocialProfile(
             userId = uid, nickname = name, timezone = timezone,
             companyId = company.id, companyName = company.name, jobTitle = title.ifEmpty { null },
-            companyRankingOptIn = companyRankingOptIn,
+            companyRankingOptIn = companyRankingOptIn, companyMemberships = listOf(membership),
         )
         writeProfile(profile)
         SocialConnection(ENDPOINT, profile)
@@ -97,8 +129,22 @@ class FirebaseSocialRepository : SocialRepository {
     override suspend fun updateProfile(profile: SocialProfile): SocialProfile = guarded {
         val uid = currentUid()
         require(profile.userId == uid)
-        writeProfile(profile)
-        profile
+        val normalized = normalizeMemberships(profile)
+        writeProfile(normalized)
+        normalized
+    }
+
+    override suspend fun selectCompany(companyId: String): SocialProfile = guarded {
+        val uid = currentUid()
+        val profile = normalizeMemberships(readProfile(uid) ?: throw SocialException("not_connected"))
+        val membership = profile.companyMemberships.firstOrNull { it.id == companyId }
+            ?: throw SocialException("company_not_found")
+        val selected = profile.copy(
+            companyId = membership.id, companyName = membership.name, jobTitle = membership.jobTitle,
+            companyRankingOptIn = membership.companyRankingOptIn,
+        )
+        writeProfile(selected)
+        selected
     }
 
     override suspend fun createRoom(name: String, kind: RoomKind, goalMinutes: Int, invitationDurationMinutes: Int, privacyAccepted: Boolean): SocialRoom = guarded {
@@ -205,10 +251,13 @@ class FirebaseSocialRepository : SocialRepository {
         if (minutes !in 1..180) throw SocialException("invalid_minutes")
         val uid = currentUid()
         val profile = readProfile(uid) ?: throw SocialException("not_connected")
-        val companyId = profile.companyId ?: throw SocialException("company_not_selected")
-        val ref = db.collection(COMPANIES).document(companyId).collection(COMPLETIONS).document("${uid}_$sessionId")
-        if (!ref.get().exists) {
-            ref.set(CompletionDoc.serializer(), CompletionDoc(uid, currentWeek(), minutes, Clock.System.now().toEpochMilliseconds()))
+        val companyIds = companyIds(profile)
+        if (companyIds.isEmpty()) throw SocialException("company_not_selected")
+        companyIds.forEach { companyId ->
+            val ref = db.collection(COMPANIES).document(companyId).collection(COMPLETIONS).document("${uid}_$sessionId")
+            if (!ref.get().exists) {
+                ref.set(CompletionDoc.serializer(), CompletionDoc(uid, currentWeek(), minutes, Clock.System.now().toEpochMilliseconds()))
+            }
         }
         Unit
     }
@@ -228,8 +277,17 @@ class FirebaseSocialRepository : SocialRepository {
         val profile = readProfile(uid) ?: throw SocialException("not_connected")
         // Stops new completion uploads (companyId cleared) and disables the public ranking row; prior
         // completions/rows already written stay in Firestore per data retention policy.
-        profile.companyId?.let { companyId -> db.collection(COMPANIES).document(companyId).collection(COMPANY_RANKING).document(uid).delete() }
-        val updated = profile.copy(companyId = null, companyName = null, jobTitle = null, companyRankingOptIn = false)
+        val normalized = normalizeMemberships(profile)
+        val remaining = normalized.companyMemberships.filterNot { it.id == normalized.companyId }
+        normalized.companyId?.let { companyId ->
+            db.collection(COMPANIES).document(companyId).collection(COMPANY_RANKING).document(uid).delete()
+        }
+        val next = remaining.firstOrNull()
+        val updated = normalized.copy(
+            companyId = next?.id, companyName = next?.name, jobTitle = next?.jobTitle,
+            companyRankingOptIn = next?.companyRankingOptIn ?: false,
+            companyMemberships = remaining,
+        )
         writeProfile(updated)
         updated
     }
@@ -292,9 +350,13 @@ class FirebaseSocialRepository : SocialRepository {
 
     override suspend fun deleteAccount() = guarded {
         val uid = currentUid()
+        val profile = readProfileOrNull(uid)
+        profile?.companyMemberships?.forEach { membership ->
+            db.collection(COMPANIES).document(membership.id).collection(COMPANY_RANKING).document(uid).delete()
+        }
         db.collection(USERS).document(uid).delete()
         db.collection(PUBLIC_PROFILES).document(uid).delete()
-        auth.currentUser?.delete()
+        auth.signOut()
         Unit
     }
 
@@ -309,11 +371,12 @@ class FirebaseSocialRepository : SocialRepository {
     private suspend fun readProfile(uid: String): SocialProfile? {
         val snapshot = db.collection(USERS).document(uid).get()
         if (!snapshot.exists) return null
-        return snapshot.data(UserDoc.serializer()).toDomain(uid)
+        return normalizeMemberships(snapshot.data(UserDoc.serializer()).toDomain(uid))
     }
 
     private suspend fun writeProfile(profile: SocialProfile) {
-        db.collection(USERS).document(profile.userId).set(UserDoc.serializer(), UserDoc.from(profile))
+        val normalized = normalizeMemberships(profile)
+        db.collection(USERS).document(profile.userId).set(UserDoc.serializer(), UserDoc.from(normalized))
         db.collection(PUBLIC_PROFILES).document(profile.userId).set(PublicProfileDoc.serializer(),
             PublicProfileDoc(profile.nickname, profile.nudgeOptIn, profile.rankingOptIn))
         propagateNicknameToRooms(profile.userId, profile.nickname)
@@ -495,6 +558,25 @@ private const val PRIVACY_TEXT = "Rooms receive only voluntarily submitted weekl
 
 private fun kind(value: String): RoomKind = when (value) { "friends" -> RoomKind.FRIENDS; "organization" -> RoomKind.ORGANIZATION; else -> throw SocialException("invalid_response") }
 
+private fun normalizeMemberships(profile: SocialProfile): SocialProfile {
+    var memberships = profile.companyMemberships
+    if (memberships.isEmpty() && profile.companyId != null) {
+        memberships = listOf(CompanyMembership(profile.companyId!!, profile.companyName ?: profile.companyId!!,
+            profile.jobTitle, profile.companyRankingOptIn))
+    }
+    val activeId = profile.companyId
+    if (activeId != null) {
+        memberships = memberships.map {
+            if (it.id == activeId) it.copy(name = profile.companyName ?: it.name, jobTitle = profile.jobTitle,
+                companyRankingOptIn = profile.companyRankingOptIn) else it
+        }
+    }
+    return profile.copy(companyMemberships = memberships.distinctBy { it.id })
+}
+
+private fun companyIds(profile: SocialProfile): List<String> =
+    normalizeMemberships(profile).companyMemberships.map { it.id }.distinct()
+
 @Serializable
 private data class UserDoc(
     val nickname: String = "", val timezone: String = "UTC",
@@ -502,14 +584,28 @@ private data class UserDoc(
     val quietStartMinute: Int = 1320, val quietEndMinute: Int = 480,
     val companyId: String? = null, val companyName: String? = null, val jobTitle: String? = null,
     val companyRankingOptIn: Boolean = false,
+    val companyMemberships: List<CompanyMembershipDoc> = emptyList(),
+    val companyIds: List<String> = emptyList(),
 ) {
     fun toDomain(uid: String) = SocialProfile(uid, nickname, timezone, liveOptIn, rankingOptIn, nudgeOptIn,
-        quietStartMinute, quietEndMinute, companyId, companyName, jobTitle, companyRankingOptIn)
+        quietStartMinute, quietEndMinute, companyId, companyName, jobTitle, companyRankingOptIn,
+        companyMemberships.map { CompanyMembership(it.id, it.name, it.jobTitle, it.companyRankingOptIn) })
     companion object {
         fun from(v: SocialProfile) = UserDoc(v.nickname, v.timezone, v.liveOptIn, v.rankingOptIn, v.nudgeOptIn,
-            v.quietStartMinute, v.quietEndMinute, v.companyId, v.companyName, v.jobTitle, v.companyRankingOptIn)
+            v.quietStartMinute, v.quietEndMinute, v.companyId, v.companyName, v.jobTitle, v.companyRankingOptIn,
+            v.companyMemberships.map { CompanyMembershipDoc(it.id, it.name, it.jobTitle, it.companyRankingOptIn) },
+            companyIds(v).ifEmpty { listOfNotNull(v.companyId) })
     }
 }
+
+@Serializable
+private data class CompanyMembershipDoc(
+    val id: String = "", val name: String = "", val jobTitle: String? = null,
+    val companyRankingOptIn: Boolean = false,
+)
+
+@Serializable
+private data class CompanyDoc(val name: String = "", val ownerId: String = "")
 
 @Serializable
 private data class RoomDoc(

@@ -284,7 +284,7 @@ class FocusViewModel(
 
     private fun publish() {
         val now = timeProvider.now()
-        val progress = ProgressCalculator.calculate(snapshot.history, today(), timeZone, snapshot.settings.minimumStreakMinutes)
+        val progress = ProgressCalculator.calculate(snapshot.history, today(), timeZone, 1)
         mutableState.update {
             it.copy(session = snapshot.activeSession, settings = snapshot.settings, history = snapshot.history,
                 selectedDurationMinutes = snapshot.selectedDurationMinutes, dailyProgress = progress,

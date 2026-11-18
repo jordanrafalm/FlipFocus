@@ -8,7 +8,8 @@ import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
 import android.media.AudioManager
-import android.media.ToneGenerator
+import android.media.MediaDataSource
+import android.media.MediaPlayer
 import android.net.Uri
 import android.os.Build
 import android.os.Handler
@@ -56,6 +57,7 @@ class AndroidFocusPlatform(private val activity: ComponentActivity) : FocusPlatf
     private var lastSampleMillis = 0L
     private var gravity: DoubleArray? = null
     private var permissionResult: CompletableDeferred<Boolean>? = null
+    private var soundPlayer: MediaPlayer? = null
     private val permissionLauncher = activity.registerForActivityResult(ActivityResultContracts.RequestPermission()) {
         permissionResult?.complete(it)
         permissionResult = null
@@ -164,10 +166,32 @@ class AndroidFocusPlatform(private val activity: ComponentActivity) : FocusPlatf
             }
             activity.getSystemService(Vibrator::class.java)?.vibrate(VibrationEffect.createWaveform(timings, amplitudes, -1))
         }
-        if (sound) runCatching {
-            val tone = ToneGenerator(AudioManager.STREAM_NOTIFICATION, 35)
-            tone.startTone(if (kind == FeedbackKind.COMPLETED) ToneGenerator.TONE_PROP_ACK else ToneGenerator.TONE_PROP_BEEP, 120)
-            handler.postDelayed({ tone.release() }, 200L)
+        if (!sound) return
+    }
+
+    override fun playSound(sound: ByteArray?) {
+        soundPlayer?.runCatching { stop(); release() }
+        soundPlayer = null
+        if (sound == null) return
+        runCatching {
+            val source = object : MediaDataSource() {
+                override fun readAt(position: Long, buffer: ByteArray, offset: Int, size: Int): Int {
+                    if (position >= sound.size) return -1
+                    val count = minOf(size, sound.size - position.toInt())
+                    sound.copyInto(buffer, offset, position.toInt(), position.toInt() + count)
+                    return count
+                }
+                override fun getSize(): Long = sound.size.toLong()
+                override fun close() = Unit
+            }
+            soundPlayer = MediaPlayer().apply {
+                setAudioStreamType(AudioManager.STREAM_NOTIFICATION)
+                setDataSource(source)
+                setOnCompletionListener { it.release(); if (soundPlayer === it) soundPlayer = null }
+                prepare()
+                setVolume(0.5f, 0.5f)
+                start()
+            }
         }
     }
 
@@ -229,6 +253,7 @@ class AndroidFocusPlatform(private val activity: ComponentActivity) : FocusPlatf
     }
 
     override fun dispose() {
+        playSound(null)
         stopMonitoring()
         keepScreenAwake(false)
         permissionResult?.complete(false)

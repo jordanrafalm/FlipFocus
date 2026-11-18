@@ -16,6 +16,7 @@ import pl.flipfocus.domain.*
 import pl.flipfocus.platform.FocusPlatform
 import pl.flipfocus.platform.ReminderPermission
 import pl.flipfocus.presentation.*
+import pl.flipfocus.resources.Res
 
 /** Only a currently-live, opted-in FRIENDS room may enrich the interruption surface; never fabricated data. */
 private fun liveClanInfo(socialViewModel: SocialViewModel?): pl.flipfocus.platform.LiveClanInfo? {
@@ -48,8 +49,7 @@ fun App(viewModel: FocusViewModel, platform: FocusPlatform, socialViewModel: Soc
     val currentCopy by rememberUpdatedState(copy)
     val currentState by rememberUpdatedState(state)
     val foreground by platform.isForeground.collectAsState()
-    val monitoringEnabled = foreground && !state.isLoading && destination == AppDestination.FOCUS &&
-        state.breakRemainingMillis == null && state.session?.isTerminal == false && !customDuration
+    val monitoringEnabled = foreground && !state.isLoading
 
     LaunchedEffect(platform, viewModel) {
         platform.isForeground.collect { viewModel.accept(FocusIntent.ForegroundChanged(it)) }
@@ -65,7 +65,12 @@ fun App(viewModel: FocusViewModel, platform: FocusPlatform, socialViewModel: Soc
                 reading.availability != SensorAvailability.AVAILABLE -> viewModel.accept(FocusIntent.MeasurementUnavailable(
                     currentCopy.text("Pomiar jest niedostępny. Sprawdź uprawnienia i położenie telefonu.",
                         "Measurement is unavailable. Check permissions and your phone's position.")))
-                reading.orientation == DeviceOrientation.FACE_DOWN -> viewModel.accept(FocusIntent.PhonePositionChanged(true))
+                reading.orientation == DeviceOrientation.FACE_DOWN -> {
+                    extraScreen = null
+                    customDuration = false
+                    deleteHistory = false
+                    viewModel.accept(FocusIntent.PhonePositionChanged(true))
+                }
                 reading.orientation == DeviceOrientation.LIFTED -> viewModel.accept(FocusIntent.PhonePositionChanged(false))
                 currentState.session?.state == FocusState.FOCUSING -> viewModel.accept(FocusIntent.MeasurementUnavailable(
                     currentCopy.text("Pomiar został wstrzymany.", "Measurement paused.")))
@@ -83,8 +88,20 @@ fun App(viewModel: FocusViewModel, platform: FocusPlatform, socialViewModel: Soc
     LaunchedEffect(viewModel, platform) {
         viewModel.effects.collect { effect ->
             when (effect) {
-                is FocusEffect.Feedback -> platform.feedback(
-                    pl.flipfocus.platform.FeedbackKind.valueOf(effect.kind.name), currentSettings.soundEnabled, currentSettings.hapticsEnabled)
+                is FocusEffect.Feedback -> {
+                    platform.feedback(
+                        pl.flipfocus.platform.FeedbackKind.valueOf(effect.kind.name), false, currentSettings.hapticsEnabled,
+                    )
+                    if (currentSettings.soundEnabled) {
+                        val file = when (effect.kind) {
+                            FeedbackKind.STARTED -> "files/focus_start.mp3"
+                            FeedbackKind.RESUMED -> "files/focus_resume.mp3"
+                            FeedbackKind.INTERRUPTED -> "files/focus_interrupt.mp3"
+                            FeedbackKind.COMPLETED -> "files/focus_complete.mp3"
+                        }
+                        platform.playSound(Res.readBytes(file))
+                    } else platform.playSound(null)
+                }
                 is FocusEffect.ExportReady -> platform.shareExport(effect.content, effect.fileName)
                 is FocusEffect.Message -> scope.launch { snackbar.showSnackbar(effect.text) }
                 is FocusEffect.ReminderPreferenceChanged -> {
@@ -123,7 +140,7 @@ fun App(viewModel: FocusViewModel, platform: FocusPlatform, socialViewModel: Soc
                                                 "Join me for 25 minutes of quiet focus. Put your phone screen-down. FlipFocus: flipfocus://session?minutes=25"))
                                         })
                                         AppDestination.HISTORY -> HistoryScreen(state, copy, viewModel::accept, { deleteHistory = true })
-                                        AppDestination.SETTINGS -> SettingsScreen(state, copy, viewModel::accept, platform::openSystemSettings)
+                                        AppDestination.SETTINGS -> SettingsScreen(state, copy, viewModel::accept)
                                         AppDestination.FOCUS -> when {
                                             state.breakRemainingMillis != null -> BreakScreen(state.breakRemainingMillis ?: 0, copy, { viewModel.accept(FocusIntent.EndBreak) })
                                             state.session?.state == FocusState.COMPLETED -> CompletedScreen(state, copy, viewModel::accept)

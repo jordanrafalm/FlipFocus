@@ -23,7 +23,7 @@ enum class AppLanguage { SYSTEM, PL, EN }
 
 data class FocusSettings(
     val graceSeconds: Int = 10,
-    val minimumStreakMinutes: Int = 15,
+    val minimumStreakMinutes: Int = 1,
     val soundEnabled: Boolean = true,
     /** While a session runs, the device's Do Not Disturb is switched on (where the OS allows it). */
     val silentModeEnabled: Boolean = false,

@@ -7,8 +7,13 @@ data class SocialProfile(
     val companyId: String? = null, val companyName: String? = null, val jobTitle: String? = null,
     /** Separate from [rankingOptIn] (friend rooms): controls visibility in this company's public ranking. */
     val companyRankingOptIn: Boolean = false,
+    val companyMemberships: List<CompanyMembership> = emptyList(),
 )
 data class Company(val id: String, val name: String)
+data class CompanyMembership(
+    val id: String, val name: String, val jobTitle: String? = null,
+    val companyRankingOptIn: Boolean = false,
+)
 
 /** Minutes/sessions for one time range. Never split out by individual user. */
 data class StatsRange(val completedMinutes: Int, val completedSessions: Int)
@@ -64,12 +69,15 @@ interface SocialRepository {
     suspend fun connect(endpoint: String, nickname: String, timezone: String, privacyAccepted: Boolean, existingToken: String? = null): SocialConnection
     /** Searches the local bundled [LocalCompanyDirectory]; no network call, `endpoint` is unused and kept only for call-site symmetry. */
     suspend fun searchCompanies(endpoint: String, query: String): List<Company> = emptyList()
+    suspend fun createCompany(name: String): SocialConnection = throw SocialException("not_supported")
     /** [jobTitle] is optional; [companyRankingOptIn] separately controls visibility in the company ranking. */
     suspend fun connectCompany(endpoint: String, companyId: String, nickname: String, jobTitle: String = "",
         timezone: String, privacyAccepted: Boolean, companyRankingOptIn: Boolean = false): SocialConnection =
         connect(endpoint, nickname, timezone, privacyAccepted)
     suspend fun dashboard(): SocialDashboard
     suspend fun updateProfile(profile: SocialProfile): SocialProfile
+    /** Changes the currently displayed company without removing the other memberships. */
+    suspend fun selectCompany(companyId: String): SocialProfile = throw SocialException("not_supported")
     suspend fun createRoom(name: String, kind: RoomKind, goalMinutes: Int, invitationDurationMinutes: Int, privacyAccepted: Boolean): SocialRoom
     suspend fun previewInvitation(code: String): SocialInvitation
     suspend fun joinRoom(code: String, privacyVersion: Int): SocialRoom
@@ -78,12 +86,12 @@ interface SocialRepository {
     suspend fun closeRoom(roomId: String): SocialRoom
     suspend fun heartbeat(roomId: String, focusing: Boolean)
     suspend fun submitCompletion(roomId: String, sessionId: String, minutes: Int): SocialRoom
-    /** Idempotent per userId+sessionId; contributes to the signed-in user's company, independent of rooms. */
+    /** Idempotent per userId+sessionId; contributes to all companies joined by the signed-in user. */
     suspend fun submitCompanyCompletion(sessionId: String, minutes: Int) {}
     /** Links a credential to the current (usually anonymous) Firebase user, preserving its UID. */
     suspend fun linkEmailPassword(email: String, password: String): SocialProfile = throw SocialException("not_supported")
     suspend fun linkGoogleIdToken(idToken: String, accessToken: String? = null): SocialProfile = throw SocialException("not_supported")
-    /** Stops company sharing: clears companyId/companyName/jobTitle. Does not delete already-submitted history. */
+    /** Leaves the currently selected company without affecting other company memberships. */
     suspend fun leaveCompany(): SocialProfile = throw SocialException("not_supported")
     suspend fun sendNudge(roomId: String, recipientId: String)
     suspend fun declineNudge(nudgeId: String)

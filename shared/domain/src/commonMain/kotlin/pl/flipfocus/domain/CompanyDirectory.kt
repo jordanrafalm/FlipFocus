@@ -667,7 +667,7 @@ object LocalCompanyDirectory {
      * alphabetical. An empty query browses the full directory (alphabetical), so Clan can show a
      * company list immediately, before the user types anything.
      */
-    fun search(query: String, limit: Int = 20): List<Company> {
+    fun search(query: String, limit: Int = Int.MAX_VALUE): List<Company> {
         val term = query.trim().lowercase()
         if (term.isEmpty()) return all.sortedBy { it.name }.take(limit)
         val prefix = mutableListOf<Company>()

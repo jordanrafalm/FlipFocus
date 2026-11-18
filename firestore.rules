@@ -9,30 +9,41 @@ service cloud.firestore {
     function myCompanyId() {
       return get(/databases/$(database)/documents/users/$(request.auth.uid)).data.companyId;
     }
+    function myCompanyIds() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('companyIds', []);
+    }
+    function belongsToCompany(companyId) {
+      return signedIn() && (myCompanyId() == companyId || myCompanyIds().hasAny([companyId]));
+    }
 
-    // No company documents exist on the Spark plan: the company directory is bundled locally in
-    // the app (LocalCompanyDirectory), never read from or written to Firestore. Only the caller's
-    // own completions live under this path, purely as a namespace for grouping by companyId.
+    // Built-in companies are bundled locally. Custom company names are public so other users can
+    // find and join them; statistics remain restricted in the subcollections below.
     match /companies/{companyId} {
-      allow read, write: if false;
+      allow read: if signedIn();
+      allow create: if signedIn()
+        && request.resource.data.ownerId == request.auth.uid
+        && request.resource.data.name is string
+        && request.resource.data.name.size() >= 2
+        && request.resource.data.name.size() <= 80;
+      allow update, delete: if false;
 
       // Raw per-user completions stay private to their author; a coworker can never read
       // another employee's row. There is no aggregate/rollup on the free plan.
       match /completions/{completionId} {
         // get(): the client checks its own doc-id ("uid_sessionId") before creating one, while
         // the document may not exist yet, so this only checks the id, never resource.data.
-        allow get: if isOwner(request.auth.uid) && myCompanyId() == companyId
+        allow get: if isOwner(request.auth.uid) && belongsToCompany(companyId)
           && completionId.matches(request.auth.uid + '_.+');
         // list(): personalStats() always queries `where uid == callerUid`; Firestore can verify
         // that constraint against this rule ahead of running the query, so a coworker's own
         // list() attempt (whose uid differs from request.auth.uid) is rejected outright.
-        allow list: if isOwner(request.auth.uid) && myCompanyId() == companyId
+        allow list: if isOwner(request.auth.uid) && belongsToCompany(companyId)
           && resource.data.uid == request.auth.uid;
         // Owner, matching company, sane minutes, and a completionId that stays "uid_..." so one
         // employee cannot masquerade as another's contribution key; the doc-id-only immutability
         // below (create, never update/delete) is what makes each completion count exactly once.
         allow create: if isOwner(request.resource.data.uid)
-          && myCompanyId() == companyId
+          && belongsToCompany(companyId)
           && completionId.matches(request.resource.data.uid + '_.+')
           && request.resource.data.minutes is int
           && request.resource.data.minutes >= 1 && request.resource.data.minutes <= 180;
@@ -44,8 +55,8 @@ service cloud.firestore {
       // contains other employees' raw completions. Visible to any coworker currently associated with
       // the same company — never to a different company, never server-verified (Spark plan).
       match /ranking/{uid} {
-        allow get, list: if signedIn() && myCompanyId() == companyId;
-        allow create, update: if isOwner(uid) && myCompanyId() == companyId
+        allow get, list: if belongsToCompany(companyId);
+        allow create, update: if isOwner(uid) && belongsToCompany(companyId)
           && request.resource.data.uid == uid;
         allow delete: if isOwner(uid);
       }
@@ -91,6 +102,12 @@ service cloud.firestore {
         allow create: if isOwner(request.resource.data.uid);
         allow update, delete: if false;
       }
+    }
+
+    // collectionGroup("members") is used to find the caller's own room memberships.
+    // Keep that query scoped to documents whose uid matches the authenticated user.
+    match /{path=**}/members/{memberUid} {
+      allow read: if isOwner(resource.data.uid);
     }
 
     match /nudges/{nudgeId} {

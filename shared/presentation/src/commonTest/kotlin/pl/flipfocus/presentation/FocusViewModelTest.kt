@@ -83,12 +83,14 @@ class FocusViewModelTest {
     }
 
     @Test fun orientationStartsSessionFromAnyScreenAndShowsFocus() = runTest {
-        val vm = FocusViewModel(TestRepository(), TestClock(), backgroundScope, autoTick = false)
+        val repository = TestRepository(FocusSnapshot(selectedDurationMinutes = 45))
+        val vm = FocusViewModel(repository, TestClock(), backgroundScope, autoTick = false)
         runCurrent()
         vm.accept(FocusIntent.OpenScreen(FocusScreen.SETTINGS))
         vm.accept(FocusIntent.PhonePositionChanged(true)); runCurrent()
         assertEquals(FocusState.FOCUSING, vm.state.value.session?.state)
         assertEquals(FocusScreen.FOCUS, vm.state.value.screen)
+        assertEquals(45, vm.state.value.session?.duration?.minutes)
         vm.close()
     }
 

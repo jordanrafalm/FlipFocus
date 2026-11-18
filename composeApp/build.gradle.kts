@@ -66,8 +66,8 @@ android {
         applicationId = "pl.flipfocus.app"
         minSdk = 26
         targetSdk = 36
-        versionCode = 4
-        versionName = "0.1.1"
+        versionCode = 5
+        versionName = "1.0.0"
         buildConfigField("String", "GOOGLE_WEB_CLIENT_ID", "\"$googleWebClientId\"")
     }
     buildFeatures { buildConfig = true }

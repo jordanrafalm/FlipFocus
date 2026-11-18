@@ -30,7 +30,7 @@ object ProgressCalculator {
     fun calendar(
         history: List<FocusHistoryEntry>,
         timeZone: TimeZone,
-        minimumStreakMinutes: Int = 15,
+        minimumStreakMinutes: Int = 1,
     ): List<FocusDay> {
         require(minimumStreakMinutes in 1..180)
         return history.distinctBy { it.id }
@@ -50,7 +50,7 @@ object ProgressCalculator {
         history: List<FocusHistoryEntry>,
         today: LocalDate,
         timeZone: TimeZone,
-        minimumStreakMinutes: Int = 15,
+        minimumStreakMinutes: Int = 1,
     ): DailyProgress {
         val days = calendar(history, timeZone, minimumStreakMinutes)
         val day = days.firstOrNull { it.date == today }

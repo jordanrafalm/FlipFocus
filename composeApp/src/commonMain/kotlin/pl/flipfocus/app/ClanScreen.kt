@@ -4,6 +4,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -18,15 +20,12 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import kotlinx.coroutines.launch
-import kotlinx.datetime.TimeZone
 import pl.flipfocus.domain.*
 import pl.flipfocus.presentation.*
 
-private enum class ClanDialog { COMPANY, CONNECT, CREATE, JOIN, ACCOUNT, ROOM, ROOMS, DELETE_ACCOUNT, LEAVE, CLOSE, DISCONNECT, REPORT, SECURE_ACCOUNT }
+private enum class ClanDialog { COMPANY, CREATE_COMPANY, CREATE, ACCOUNT, ROOM, ROOMS, DELETE_ACCOUNT, LEAVE, CLOSE, DISCONNECT, REPORT }
 
 /** The Firebase-backed company directory needs no user-facing service address. */
 private const val FIREBASE_ENDPOINT = "firebase"
@@ -40,33 +39,48 @@ fun ClanRoute(
     val state by viewModel.state.collectAsState()
     var dialog by remember { mutableStateOf<ClanDialog?>(null) }
     var selectedCompany by remember { mutableStateOf<Company?>(null) }
-    val scope = androidx.compose.runtime.rememberCoroutineScope()
+    var showCompanyPicker by remember { mutableStateOf(false) }
     val room = state.selectedRoom
-    ClanScreen(state, copy, viewModel::accept, onBack,
+    ClanScreen(state, copy, viewModel::accept, onBack = {
+            if (showCompanyPicker) showCompanyPicker = false else onBack()
+        }, companyPickerOpen = showCompanyPicker,
+        onCompanies = { showCompanyPicker = true; dialog = null },
         onRooms = { dialog = ClanDialog.ROOMS }, onInvite = {
             if (room?.inviteCode != null) onShare(copy.text(
-                "Dołącz do pokoju ${room.name} w FlipFocus. Kod: ${room.inviteCode}. ${room.invitationDurationMinutes} minut spokojnej pracy. Usługa: ${state.connection?.endpoint}",
-                "Join ${room.name} in FlipFocus. Code: ${room.inviteCode}. ${room.invitationDurationMinutes} quiet minutes. Service: ${state.connection?.endpoint}"))
+                "Dołącz do clanu ${room.name} w FlipFocus. Kod: ${room.inviteCode}. Usługa: ${state.connection?.endpoint}",
+                "Join clan ${room.name} in FlipFocus. Code: ${room.inviteCode}. Service: ${state.connection?.endpoint}"))
             else dialog = ClanDialog.CREATE
-        }, onConnect = { dialog = ClanDialog.CONNECT },
-        onSelectCompany = { company -> selectedCompany = company; dialog = ClanDialog.COMPANY },
+        }, onConnect = { dialog = ClanDialog.CREATE_COMPANY },
+        onSelectCompany = { company ->
+            if (state.connection?.profile?.companyMemberships.orEmpty().any { it.id == company.id }) {
+                viewModel.accept(SocialIntent.SelectCompany(company.id))
+                showCompanyPicker = false
+            } else {
+                selectedCompany = company
+                dialog = ClanDialog.COMPANY
+            }
+        },
         onCreate = { dialog = ClanDialog.CREATE },
-        onJoin = { dialog = ClanDialog.JOIN }, onAccount = { dialog = ClanDialog.ACCOUNT }, onRoomSettings = { dialog = ClanDialog.ROOM })
+        onAccount = { dialog = ClanDialog.ACCOUNT }, onRoomSettings = { dialog = ClanDialog.ROOM })
 
     when (dialog) {
         ClanDialog.COMPANY -> selectedCompany?.let { company -> CompanyJoinDialog(copy, state.isBusy, company,
             onJoin = { nickname, jobTitle, consent, rankingOptIn ->
                 viewModel.accept(SocialIntent.ConnectCompany(FIREBASE_ENDPOINT, company.id, nickname, jobTitle, consent, rankingOptIn))
-                dialog = null; selectedCompany = null
+                dialog = null; selectedCompany = null; showCompanyPicker = false
             }, onDismiss = { dialog = null; selectedCompany = null }) }
-        ClanDialog.CONNECT -> ConnectDialog(copy, state.isBusy, { dialog = null }) { intent -> viewModel.accept(intent); dialog = null }
+        ClanDialog.CREATE_COMPANY -> CreateCompanyDialog(copy, state.isBusy, { dialog = null }) { name ->
+            viewModel.accept(SocialIntent.CreateCompany(name))
+            dialog = null
+        }
         ClanDialog.CREATE -> CreateRoomDialog(copy, { dialog = null }) { viewModel.accept(it); dialog = null }
-        ClanDialog.JOIN -> JoinRoomDialog(copy, { dialog = null }) { viewModel.accept(SocialIntent.PreviewInvitation(it)); dialog = null }
-        ClanDialog.ROOMS -> AlertDialog(onDismissRequest = { dialog = null }, title = { Text(copy.text("Twoje pokoje", "Your rooms")) },
+        ClanDialog.ROOMS -> AlertDialog(onDismissRequest = { dialog = null }, title = { Text(copy.text("Twoje clany", "Your clans")) },
             text = { Column(Modifier.verticalScroll(rememberScrollState())) {
                 state.rooms.forEach { item -> TextButton({ viewModel.accept(SocialIntent.SelectRoom(item.id)); dialog = null }, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) { Text(item.name) } }
-                TextButton({ dialog = ClanDialog.CREATE }) { Text(copy.text("+ Utwórz pokój", "+ Create a room")) }
-                TextButton({ dialog = ClanDialog.JOIN }) { Text(copy.text("Dołącz kodem", "Join with a code")) }
+                TextButton({ dialog = ClanDialog.CREATE }) { Text(copy.text("+ Utwórz clan", "+ Create a clan")) }
+                TextButton({ showCompanyPicker = true; dialog = null }) {
+                    Text(copy.text("Zmień firmę lub dołącz do kolejnej", "Switch company or join another"))
+                }
                 TextButton({ dialog = ClanDialog.ACCOUNT }) { Text(copy.text("Konto i prywatność", "Account and privacy")) }
             } }, confirmButton = { TextButton({ dialog = null }) { Text(copy.done) } })
         ClanDialog.ACCOUNT -> state.connection?.let { connection -> AlertDialog(
@@ -74,18 +88,9 @@ fun ClanRoute(
             text = { Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(connection.profile.nickname, style = MaterialTheme.typography.titleMedium)
                 Text(connection.endpoint, style = MaterialTheme.typography.bodySmall, color = FocusColors.muted)
-                SettingsToggle(copy.text("Otrzymuj zaproszenia Nudge", "Receive nudges"),
-                    copy.text("Maks. 3 dziennie. Cisza od 22:00 do 8:00 w Twojej strefie. Odrzucenie blokuje nadawcę.",
-                        "At most 3 a day. Quiet hours 22:00–08:00 in your timezone. Declining blocks the sender."),
-                    connection.profile.nudgeOptIn, onChange = { viewModel.accept(SocialIntent.UpdateProfile(connection.profile.copy(nudgeOptIn = it))) })
-                TextButton({ viewModel.accept(SocialIntent.ExportAccount) }) { Text(copy.text("Eksportuj dane konta", "Export account data")) }
-                TextButton({ dialog = ClanDialog.SECURE_ACCOUNT }) { Text(copy.text("Zabezpiecz konto hasłem", "Secure account with a password")) }
-                TextButton({ scope.launch { onGoogleSignIn()?.let { viewModel.accept(SocialIntent.LinkGoogle(it.idToken, it.accessToken)) } } }) {
-                    Text(copy.text("Zabezpiecz kontem Google", "Secure account with Google"))
-                }
                 if (connection.profile.companyId != null) FocusCard {
                     Text(copy.text("Firma: ${connection.profile.companyName}", "Company: ${connection.profile.companyName}"), style = MaterialTheme.typography.bodyMedium)
-                    Text(copy.text("Każda ukończona sesja jest wysyłana do statystyk tej firmy.", "Every completed session is uploaded to this company's statistics."),
+                    Text(copy.text("Każda ukończona sesja jest wysyłana do statystyk wszystkich Twoich firm.", "Every completed session is uploaded to all of your companies' statistics."),
                         style = MaterialTheme.typography.bodySmall, color = FocusColors.muted)
                     TextButton({ viewModel.accept(SocialIntent.LeaveCompany) }) { Text(copy.text("Opuść firmę i wyłącz udostępnianie", "Leave company and stop sharing"), color = FocusColors.amber) }
                 }
@@ -98,25 +103,22 @@ fun ClanRoute(
                 Text(selected.privacyText, style = MaterialTheme.typography.bodyMedium, color = FocusColors.muted)
                 val profile = state.connection?.profile
                 if (selected.kind == RoomKind.FRIENDS && profile != null) {
-                    SettingsToggle("LIVE", copy.text("Udostępniaj tylko aktualny status w tym pokoju.", "Share only your current status in this room."),
+                    SettingsToggle("LIVE", copy.text("Udostępniaj tylko aktualny status w tym clanie.", "Share only your current status in this clan."),
                         selected.liveOptIn && profile.liveOptIn, onChange = { enabled ->
                             if (enabled && !profile.liveOptIn) viewModel.accept(SocialIntent.UpdateProfile(profile.copy(liveOptIn = true)))
                             viewModel.accept(SocialIntent.UpdateRoomPreferences(selected.id, enabled, selected.rankingOptIn))
                         })
                     SettingsToggle(copy.text("Ranking tygodniowy", "Weekly ranking"),
-                        copy.text("Pokaż pseudonim i sumę minut w tym pokoju.", "Show your nickname and total minutes in this room."),
+                        copy.text("Pokaż pseudonim i sumę minut w tym clanie.", "Show your nickname and total minutes in this clan."),
                         selected.rankingOptIn && profile.rankingOptIn, onChange = { enabled ->
                             if (enabled && !profile.rankingOptIn) viewModel.accept(SocialIntent.UpdateProfile(profile.copy(rankingOptIn = true)))
                             viewModel.accept(SocialIntent.UpdateRoomPreferences(selected.id, selected.liveOptIn, enabled))
                         })
                 }
                 TextButton({ dialog = ClanDialog.REPORT }) { Text(copy.text("Zgłoś nadużycie", "Report abuse")) }
-                if (selected.role == RoomRole.OWNER) TextButton({ dialog = ClanDialog.CLOSE }) { Text(copy.text("Zamknij pokój", "Close room"), color = FocusColors.amber) }
-                else TextButton({ dialog = ClanDialog.LEAVE }) { Text(copy.text("Opuść pokój", "Leave room"), color = FocusColors.amber) }
+                if (selected.role == RoomRole.OWNER) TextButton({ dialog = ClanDialog.CLOSE }) { Text(copy.text("Zamknij clan", "Close clan"), color = FocusColors.amber) }
+                else TextButton({ dialog = ClanDialog.LEAVE }) { Text(copy.text("Opuść clan", "Leave clan"), color = FocusColors.amber) }
             } }, confirmButton = { TextButton({ dialog = null }) { Text(copy.done) } }) }
-        ClanDialog.SECURE_ACCOUNT -> SecureAccountDialog(copy, state.isBusy, state.errorCode, { dialog = null }) { email, password ->
-            viewModel.accept(SocialIntent.LinkEmailPassword(email, password))
-        }
         ClanDialog.REPORT -> AlertDialog(onDismissRequest = { dialog = null }, title = { Text(copy.text("Zgłoś nadużycie", "Report abuse")) },
             text = { Column { SocialReportReason.entries.forEach { reason ->
                 TextButton({ room?.let { viewModel.accept(SocialIntent.ReportRoom(it.id, reason)) }; dialog = null }, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) {
@@ -127,14 +129,14 @@ fun ClanRoute(
             val action = dialog
             AlertDialog(onDismissRequest = { dialog = null }, title = { Text(when (action) {
                 ClanDialog.DELETE_ACCOUNT -> copy.text("Usunąć konto?", "Delete account?")
-                ClanDialog.CLOSE -> copy.text("Zamknąć pokój?", "Close room?")
+                ClanDialog.CLOSE -> copy.text("Zamknąć clan?", "Close clan?")
                 ClanDialog.DISCONNECT -> copy.text("Odłączyć konto?", "Disconnect account?")
-                else -> copy.text("Opuścić pokój?", "Leave room?")
+                else -> copy.text("Opuścić clan?", "Leave clan?")
             }) }, text = { Text(if (action == ClanDialog.DISCONNECT && state.pendingSyncCount > 0)
                 copy.text("Masz ${state.pendingSyncCount} niewysłanych wpisów (minuty/punkty). Odłączenie teraz je utraci — jeśli to możliwe, poczekaj na połączenie z siecią i spróbuj ponownie.",
                     "You have ${state.pendingSyncCount} unsynced entries (minutes/points). Disconnecting now will lose them — if possible, wait for a network connection and retry first.")
-                else copy.text("Ta zmiana dotyczy społeczności. Twoja lokalna historia i passa pozostaną zachowane. Usunięcie konta i zamknięcie pokoju są trwałe.",
-                "This affects the community. Your local history and streak stay safe. Account deletion and room closure are permanent.")) },
+                else copy.text("Ta zmiana dotyczy społeczności. Twoja lokalna historia i passa pozostaną zachowane. Usunięcie konta i zamknięcie clanu są trwałe.",
+                "This affects the community. Your local history and streak stay safe. Account deletion and clan closure are permanent.")) },
                 confirmButton = { TextButton({
                     when (action) {
                         ClanDialog.DELETE_ACCOUNT -> viewModel.accept(SocialIntent.DeleteAccount)
@@ -161,11 +163,12 @@ fun ClanRoute(
 fun ClanScreen(
     state: SocialUiState, copy: Copy, onIntent: (SocialIntent) -> Unit, onBack: () -> Unit,
     onRooms: () -> Unit, onInvite: () -> Unit, onConnect: () -> Unit, onSelectCompany: (Company) -> Unit, onCreate: () -> Unit,
-    onJoin: () -> Unit, onAccount: () -> Unit, onRoomSettings: () -> Unit, modifier: Modifier = Modifier,
+    onAccount: () -> Unit, onRoomSettings: () -> Unit, modifier: Modifier = Modifier,
+    companyPickerOpen: Boolean = false, onCompanies: () -> Unit = {},
 ) {
     val room = state.selectedRoom
     val profile = state.connection?.profile
-    val pickerMode = profile?.companyId == null
+    val pickerMode = profile?.companyId == null || companyPickerOpen
     var companyRange by remember { mutableStateOf(StatsRangeSelector.LAST_7_DAYS) }
     val companySorted = state.companyRanking.sortedByDescending { companyPoints(it, companyRange) }
     Column(modifier.fillMaxSize().padding(horizontal = 24.dp)) {
@@ -175,19 +178,20 @@ fun ClanScreen(
                     .semantics { contentDescription = copy.text("Wstecz", "Back") }) {
                     Text("←", color = FocusColors.text, style = MaterialTheme.typography.headlineSmall)
                 }
-                Text(copy.text("Wybór clanu", "Choose your clan"), color = FocusColors.text, style = MaterialTheme.typography.titleLarge,
+                Text(copy.text(if (companyPickerOpen) "Twoje firmy" else "Wybór clanu",
+                    if (companyPickerOpen) "Your companies" else "Choose your clan"),
+                    color = FocusColors.text, style = MaterialTheme.typography.titleLarge,
                     fontWeight = FontWeight.Bold, textAlign = TextAlign.Center, modifier = Modifier.weight(1f))
                 IconButton(onConnect, modifier = Modifier.size(40.dp).border(1.dp, FocusColors.border, CircleShape)
-                    .semantics { contentDescription = copy.text("Połącz konto", "Connect account") }) {
+                    .semantics { contentDescription = copy.text("Utwórz firmę", "Create company") }) {
                     Text("+", color = FocusColors.text, style = MaterialTheme.typography.headlineSmall)
                 }
             } else {
-                TextButton(onBack, contentPadding = PaddingValues(0.dp), modifier = Modifier.weight(1f)) {
-                    Text("‹ Focus Clan", color = FocusColors.text, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
-                }
+                Text("Focus Clan", color = FocusColors.text, style = MaterialTheme.typography.headlineSmall,
+                    fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
                 OutlinedButton(onRooms, shape = RoundedCornerShape(50), contentPadding = PaddingValues(horizontal = 14.dp),
                     modifier = Modifier.widthIn(max = 150.dp).heightIn(min = 40.dp)) {
-                    Text((room?.name ?: copy.text("Pokoje", "Rooms")) + " ⌄", style = MaterialTheme.typography.bodySmall, maxLines = 1)
+                    Text((room?.name ?: copy.text("Clany", "Clans")) + " ⌄", style = MaterialTheme.typography.bodySmall, maxLines = 1)
                 }
                 IconButton(onInvite, modifier = Modifier.size(40.dp).border(1.dp, FocusColors.border, CircleShape)
                     .semantics { contentDescription = copy.text("Zaproś znajomego", "Invite a friend") }) { Text("+", style = MaterialTheme.typography.headlineSmall) }
@@ -203,35 +207,39 @@ fun ClanScreen(
             var companyQuery by remember { mutableStateOf("") }
             var highlighted by remember { mutableStateOf<Company?>(null) }
             LaunchedEffect(Unit) { onIntent(SocialIntent.SearchCompanies(FIREBASE_ENDPOINT, "")) }
-            Column(Modifier.weight(1f).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                Box(Modifier.fillMaxWidth()) {
-                    Box(Modifier.align(Alignment.TopCenter).offset(y = (-32).dp).size(260.dp)
-                        .background(Brush.radialGradient(listOf(FocusColors.green.copy(alpha = 0.20f), Color.Transparent))))
-                    Column(Modifier.padding(top = 16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                        Text(copy.text("Skupienie jest lepsze wspólnie.", "Focus is better together."), style = MaterialTheme.typography.headlineLarge)
-                        Text(copy.text("Wybierz firmę, aby dołączyć do jej prywatnego rankingu skupienia. Konto jest opcjonalne, a historia sesji zostaje na Twoim urządzeniu.",
-                            "Choose your company to join its private focus ranking. An account is optional and your session history stays on your device."),
-                            color = FocusColors.muted)
+            LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                item {
+                    Box(Modifier.fillMaxWidth()) {
+                        Box(
+                            Modifier.matchParentSize().align(Alignment.TopCenter)
+                                .background(Brush.radialGradient(listOf(FocusColors.green.copy(alpha = 0.20f), Color.Transparent))),
+                        )
+                        Column(Modifier.padding(top = 4.dp, bottom = 4.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                            Text(copy.text("Skupienie jest lepsze wspólnie.", "Focus is better together."), style = MaterialTheme.typography.headlineLarge)
+                            Text(copy.text("Wybierz firmę, aby dołączyć do jej prywatnego rankingu skupienia. Konto jest opcjonalne, a historia sesji zostaje na Twoim urządzeniu.",
+                                "Choose your company to join its private focus ranking. An account is optional and your session history stays on your device."),
+                                color = FocusColors.muted)
+                        }
                     }
                 }
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                item { Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                     SectionLabel(copy.text("FIRMY W KATEGORII „PRACA”", "COMPANIES IN THE “WORK” CATEGORY"))
                     Text(copy.text("${state.companies.size} dostępnych", "${state.companies.size} available"),
                         style = MaterialTheme.typography.bodySmall, color = FocusColors.muted)
-                }
-                OutlinedTextField(companyQuery, { companyQuery = it.take(80); onIntent(SocialIntent.SearchCompanies(FIREBASE_ENDPOINT, it)) },
+                } }
+                item { OutlinedTextField(companyQuery, { companyQuery = it.take(80); onIntent(SocialIntent.SearchCompanies(FIREBASE_ENDPOINT, it)) },
                     label = { Text(copy.text("Szukaj firmy", "Search companies")) }, singleLine = true,
-                    shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth())
-                when {
-                    state.isBusy -> LinearProgressIndicator(Modifier.fillMaxWidth())
-                    state.companies.isEmpty() -> Text(copy.text("Nie znaleziono firm dla tego wyszukiwania.", "No companies match this search."),
+                    shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth()) }
+                if (state.isBusy) item { LinearProgressIndicator(Modifier.fillMaxWidth()) }
+                if (state.companies.isEmpty() && !state.isBusy) item {
+                    Text(copy.text("Nie znaleziono firm. Użyj +, aby utworzyć nową.", "No companies found. Use + to create one."),
                         style = MaterialTheme.typography.bodyMedium, color = FocusColors.muted)
-                    else -> state.companies.forEach { company ->
-                        CompanyPickerCard(company, company.id == highlighted?.id, copy) { highlighted = company }
-                    }
                 }
-                TextButton(onConnect) { Text(copy.text("Pokoje bez firmy", "Rooms without a company")) }
-                Spacer(Modifier.height(4.dp))
+                items(state.companies, key = { it.id }) { company ->
+                    CompanyPickerCard(company, company.id == highlighted?.id,
+                        profile?.companyMemberships.orEmpty().any { it.id == company.id }, copy) { highlighted = company }
+                }
+                item { Spacer(Modifier.height(4.dp)) }
             }
             highlighted?.let { company ->
                 Column(Modifier.padding(top = 12.dp, bottom = 4.dp)) {
@@ -239,10 +247,16 @@ fun ClanScreen(
                         .clickable { onSelectCompany(company) }.padding(horizontal = 20.dp, vertical = 16.dp),
                         horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                         Column {
-                            Text(copy.text("Dołącz do", "Join"), style = MaterialTheme.typography.labelSmall, color = FocusColors.onGreen.copy(alpha = .7f))
+                            Text(copy.text(
+                                if (profile?.companyMemberships.orEmpty().any { it.id == company.id }) "Przejdź do" else "Dołącz do",
+                                if (profile?.companyMemberships.orEmpty().any { it.id == company.id }) "Switch to" else "Join",
+                            ), style = MaterialTheme.typography.labelSmall, color = FocusColors.onGreen.copy(alpha = .7f))
                             Text(company.name, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = FocusColors.onGreen)
                         }
-                        Text("→", style = MaterialTheme.typography.headlineSmall, color = FocusColors.onGreen)
+                        Text(
+                            if (profile?.companyMemberships.orEmpty().any { it.id == company.id }) "✓" else "→",
+                            style = MaterialTheme.typography.headlineSmall, color = FocusColors.onGreen,
+                        )
                     }
                     Text(copy.text("Możesz opuścić firmę w dowolnym momencie w Koncie i prywatności.", "You can leave the company anytime in Account and privacy."),
                         style = MaterialTheme.typography.labelSmall, color = FocusColors.muted, textAlign = TextAlign.Center,
@@ -255,13 +269,9 @@ fun ClanScreen(
             Column(Modifier.weight(1f).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(24.dp)) {
                 Spacer(Modifier.height(24.dp))
                 if (profile.companyId != null) {
-                    PersonalCompanyCard(profile.companyName, state.personalStats, state.companyAggregateDeferred, copy)
+                    PersonalCompanyCard(profile.companyName, state.personalStats, copy)
                     CompanyRankingSection(profile, companySorted, companyRange, { companyRange = it }, onIntent, copy)
                 }
-                Text(copy.text("Twój pierwszy pokój", "Your first room"), style = MaterialTheme.typography.headlineLarge)
-                Text(copy.text("Zaproś bliskich albo dołącz do istniejącego zespołu.", "Invite your people or join an existing team."), color = FocusColors.muted)
-                FocusButton(copy.text("Utwórz prywatny pokój", "Create a private room"), onCreate, enabled = !state.isBusy)
-                OutlinedButton(onJoin, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) { Text(copy.text("Dołącz kodem", "Join with a code")) }
                 TextButton(onAccount) { Text(copy.text("Konto i prywatność", "Account and privacy")) }
             }
             val ownCompanyIndex = companySorted.indexOfFirst { it.userId == profile.userId }
@@ -281,7 +291,7 @@ fun ClanScreen(
         val ownIndex = room.ranking.indexOfFirst { it.userId == profile.userId }
         Column(Modifier.weight(1f).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(14.dp)) {
             if (profile.companyId != null) {
-                PersonalCompanyCard(profile.companyName, state.personalStats, state.companyAggregateDeferred, copy)
+                PersonalCompanyCard(profile.companyName, state.personalStats, copy)
                 CompanyRankingSection(profile, companySorted, companyRange, { companyRange = it }, onIntent, copy)
             }
             if (room.kind == RoomKind.FRIENDS) {
@@ -310,13 +320,13 @@ fun ClanScreen(
                     SectionLabel(copy.text("RANKING ZNAJOMYCH", "FRIENDS RANKING"))
                     room.ranking.drop(3).forEachIndexed { index, entry ->
                         RankingRow(entry.nickname, entry.completedMinutes, index + 4, entry.userId == profile.userId, room.live.any { it.userId == entry.userId }, copy,
-                            onNudge = { onIntent(SocialIntent.SendNudge(room.id, entry.userId)) }, enabled = !state.isBusy)
+                            enabled = !state.isBusy)
                         HorizontalDivider(color = FocusColors.border)
                     }
                 } else FocusCard {
                     Text(copy.text("Wspólnie, na własnych zasadach", "Together, on your own terms"), style = MaterialTheme.typography.titleMedium)
-                    Text(copy.text("Ranking jest dobrowolny. Włącz go w ustawieniach pokoju, jeśli pomaga Ci w rytuale.",
-                        "Ranking is optional. Enable it in room settings if it helps your ritual."), style = MaterialTheme.typography.bodyMedium, color = FocusColors.muted)
+                    Text(copy.text("Ranking jest dobrowolny. Włącz go w ustawieniach clanu, jeśli pomaga Ci w rytuale.",
+                        "Ranking is optional. Enable it in clan settings if it helps your ritual."), style = MaterialTheme.typography.bodyMedium, color = FocusColors.muted)
                 }
             }
             FocusCard {
@@ -331,12 +341,8 @@ fun ClanScreen(
                     "Results appear after the week ends, once at least 3 people have contributed."), style = MaterialTheme.typography.bodyMedium, color = FocusColors.muted)
                 Text(copy.text("Tydzień od ", "Week of ") + room.week, style = MaterialTheme.typography.bodySmall, color = FocusColors.muted)
             }
-            state.nudges.forEach { nudge -> FocusCard {
-                Text(copy.text("${nudge.senderNickname} zaprasza Cię do skupienia.", "${nudge.senderNickname} invites you to focus."))
-                TextButton({ onIntent(SocialIntent.DeclineNudge(nudge.id)) }) { Text(copy.text("Odrzuć i wycisz tę osobę", "Decline and mute this person")) }
-            } }
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                TextButton(onRoomSettings, enabled = !state.isBusy) { Text(copy.text("Zasady pokoju", "Room settings")) }
+                TextButton(onRoomSettings, enabled = !state.isBusy) { Text(copy.text("Zasady clanu", "Clan settings")) }
                 TextButton({ onIntent(SocialIntent.Refresh) }, enabled = !state.isBusy) { Text(copy.text("Odśwież", "Refresh")) }
             }
         }
@@ -353,38 +359,23 @@ fun ClanScreen(
     }
 }
 
-@Composable
-private fun SecureAccountDialog(copy: Copy, busy: Boolean, errorCode: String?, onDismiss: () -> Unit, onLink: (String, String) -> Unit) {
-    var email by remember { mutableStateOf("") }
-    var password by remember { mutableStateOf("") }
-    AlertDialog(onDismissRequest = onDismiss, title = { Text(copy.text("Zabezpiecz konto hasłem", "Secure account with a password")) },
-        text = { Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text(copy.text("Twój pseudonim, firma i punkty pozostają na tym samym koncie. Jeśli ten e-mail jest już użyty przez inne konto, połączenie zostanie przerwane i nic nie zostanie scalone automatycznie.",
-                "Your nickname, company and points stay on the same account. If this email is already used by another account, linking stops and nothing merges automatically."), style = MaterialTheme.typography.bodyMedium)
-            OutlinedTextField(email, { email = it }, label = { Text(copy.text("E-mail", "Email")) }, singleLine = true)
-            OutlinedTextField(password, { password = it }, label = { Text(copy.text("Hasło (min. 6 znaków)", "Password (min. 6 characters)")) },
-                singleLine = true, visualTransformation = PasswordVisualTransformation())
-            if (errorCode == "credential_already_in_use") Text(copy.text("Ten e-mail jest już połączony z innym kontem. Zaloguj się na tamto konto zamiast łączyć.",
-                "This email is already linked to another account. Sign in to that account instead of linking."), color = FocusColors.amber, style = MaterialTheme.typography.bodySmall)
-        } },
-        confirmButton = { TextButton({ onLink(email.trim(), password) }, enabled = email.isNotBlank() && password.length >= 6 && !busy) { Text(copy.text("Połącz", "Link")) } },
-        dismissButton = { TextButton(onDismiss) { Text(copy.cancel) } })
-}
-
 /**
  * One row in the company picker (Figma 53:104). No fabricated member counts, avatars or LIVE
  * activity: the Spark plan has no server-side company roster/presence, so the subtitle stays a
  * static, data-honest descriptor instead of inventing pseudo-activity.
  */
 @Composable
-private fun CompanyPickerCard(company: Company, selected: Boolean, copy: Copy, onClick: () -> Unit) {
+private fun CompanyPickerCard(company: Company, selected: Boolean, joined: Boolean, copy: Copy, onClick: () -> Unit) {
     FocusCard(Modifier.heightIn(min = 132.dp).clickable(onClick = onClick)
         .then(if (selected) Modifier.border(1.dp, FocusColors.green, RoundedCornerShape(24.dp)) else Modifier)) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
             Avatar(company.name, if (selected) FocusColors.green else FocusColors.border, Modifier.size(48.dp))
             Column(Modifier.weight(1f)) {
                 Text(company.name, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-                Text(copy.text("Prywatny ranking skupienia pracowników", "A private focus ranking for employees"),
+                Text(copy.text(
+                    if (joined) "Jesteś członkiem tej firmy" else "Prywatny ranking skupienia pracowników",
+                    if (joined) "You are a member of this company" else "A private focus ranking for employees",
+                ),
                     style = MaterialTheme.typography.bodySmall, color = FocusColors.muted)
             }
             if (selected) Text("✓", color = FocusColors.green, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
@@ -398,7 +389,7 @@ private fun CompanyPickerCard(company: Company, selected: Boolean, copy: Copy, o
 }
 
 @Composable
-private fun PersonalCompanyCard(companyName: String?, personal: PersonalStats?, aggregateDeferred: Boolean, copy: Copy) {
+private fun PersonalCompanyCard(companyName: String?, personal: PersonalStats?, copy: Copy) {
     FocusCard {
         Text(copy.text("TWOJA FIRMA", "YOUR COMPANY"), style = MaterialTheme.typography.labelSmall, color = FocusColors.muted)
         Text(companyName ?: "", style = MaterialTheme.typography.titleLarge)
@@ -407,10 +398,6 @@ private fun PersonalCompanyCard(companyName: String?, personal: PersonalStats?, 
             StatRow(copy.text("Ty (7 dni)", "You (7 days)"), copy.time(personal.last7Days.completedMinutes * 60_000L), FocusColors.green)
             StatRow(copy.text("Ty (cały okres)", "You (all-time)"), copy.time(personal.allTime.completedMinutes * 60_000L), FocusColors.green)
         }
-        if (aggregateDeferred) Text(copy.text(
-            "Zbiorczy wynik całej firmy jest niedostępny w bezpłatnej wersji. Pojawi się, gdy włączymy płatny backend serwerowy.",
-            "The company-wide aggregate isn't available in the free version. It will appear once a paid server backend is enabled."),
-            style = MaterialTheme.typography.bodySmall, color = FocusColors.muted, modifier = Modifier.padding(top = 8.dp))
     }
 }
 
@@ -510,45 +497,32 @@ private fun RankingRow(
 }
 
 @Composable
-private fun ConnectDialog(copy: Copy, busy: Boolean, onDismiss: () -> Unit, onConnect: (SocialIntent.Connect) -> Unit) {
-    var endpoint by remember { mutableStateOf("") }
-    var nickname by remember { mutableStateOf("") }
-    var token by remember { mutableStateOf("") }
-    var consent by remember { mutableStateOf(false) }
-    AlertDialog(onDismissRequest = onDismiss, title = { Text(copy.text("Połącz z zespołem", "Connect with your team")) },
-        text = { Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text(copy.text("Użyj adresu usługi podanego przez organizatora. Dane społeczności będą przechowywane w tej usłudze.",
-                "Use the service address from your organizer. Community data will be stored with that service."), style = MaterialTheme.typography.bodyMedium)
-            OutlinedTextField(endpoint, { endpoint = it }, label = { Text(copy.text("Adres usługi (https://…)", "Service address (https://…)")) }, singleLine = true)
-            OutlinedTextField(nickname, { nickname = it.take(40) }, label = { Text(copy.text("Pseudonim", "Nickname")) }, singleLine = true)
-            OutlinedTextField(token, { token = it }, label = { Text(copy.text("Klucz istniejącego konta (opcjonalny)", "Existing account key (optional)")) },
-                singleLine = true, visualTransformation = PasswordVisualTransformation())
-            ConsentRow(consent, { consent = it }, copy.text("Akceptuję zapis pseudonimu, członkostwa i sum tygodniowych. LIVE i ranking pozostają wyłączone.",
-                "I accept storing my nickname, membership and weekly totals. LIVE and ranking remain off."))
-        } }, confirmButton = { TextButton({ onConnect(SocialIntent.Connect(endpoint, nickname, consent, token.ifBlank { null }, TimeZone.currentSystemDefault().id)) },
-            enabled = consent && endpoint.isNotBlank() && (nickname.isNotBlank() || token.isNotBlank()) && !busy) { Text(copy.text("Połącz", "Connect")) } },
+private fun CreateCompanyDialog(copy: Copy, busy: Boolean, onDismiss: () -> Unit, onCreate: (String) -> Unit) {
+    var name by remember { mutableStateOf("") }
+    AlertDialog(onDismissRequest = onDismiss, title = { Text(copy.text("Utwórz firmę", "Create a company")) },
+        text = { Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text(copy.text("Podaj nazwę widoczną dla innych użytkowników. Nowa firma zostanie dodana do Twojego konta.",
+                "Enter the name other users will see. The new company will be added to your account."),
+                style = MaterialTheme.typography.bodyMedium)
+            OutlinedTextField(name, { name = it.take(80) }, label = { Text(copy.text("Nazwa firmy", "Company name")) },
+                singleLine = true, modifier = Modifier.fillMaxWidth())
+        } }, confirmButton = { TextButton({ onCreate(name.trim()) },
+            enabled = name.trim().length >= 2 && !busy) { Text(copy.text("Utwórz", "Create")) } },
         dismissButton = { TextButton(onDismiss) { Text(copy.cancel) } })
 }
 
 @Composable
 private fun CreateRoomDialog(copy: Copy, onDismiss: () -> Unit, onCreate: (SocialIntent.CreateRoom) -> Unit) {
     var name by remember { mutableStateOf("") }
-    var organization by remember { mutableStateOf(false) }
-    var duration by remember { mutableIntStateOf(25) }
     var consent by remember { mutableStateOf(false) }
-    AlertDialog(onDismissRequest = onDismiss, title = { Text(copy.text("Nowy pokój", "New room")) },
+    AlertDialog(onDismissRequest = onDismiss, title = { Text(copy.text("Nowy clan", "New clan")) },
         text = { Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            OutlinedTextField(name, { name = it.take(60) }, label = { Text(copy.text("Nazwa pokoju", "Room name")) }, singleLine = true)
-            SettingsToggle(copy.text("Zespół / uczelnia", "Team / university"), copy.text("Tylko zbiorcze wyniki zakończonego tygodnia. Bez rankingu osób.",
-                "Completed-week group results only. No individual rankings."), organization, onChange = { organization = it })
-            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                listOf(15, 25).forEach { minutes -> FilterChip(duration == minutes, { duration = minutes }, label = { Text("${minutes}m") }, modifier = Modifier.heightIn(min = 48.dp)) }
-            }
-            Text(copy.text("Cel pokoju: 500 minut tygodniowo. Jako właściciel możesz zamknąć pokój. Członkowie mogą go opuścić i zgłosić nadużycie.",
-                "Room goal: 500 minutes a week. Owners can close the room. Members can leave and report abuse."), style = MaterialTheme.typography.bodyMedium)
+            OutlinedTextField(name, { name = it.take(60) }, label = { Text(copy.text("Nazwa clanu", "Clan name")) }, singleLine = true)
+            Text(copy.text("Prywatny clan do wspólnego skupienia. Jako właściciel możesz zamknąć go w dowolnym momencie.",
+                "A private clan for focusing together. As its owner, you can close it anytime."), style = MaterialTheme.typography.bodyMedium)
             ConsentRow(consent, { consent = it }, copy.text("Akceptuję udostępnianie zbiorczych wyników. Historia i dokładne godziny sesji pozostają prywatne.",
                 "I accept sharing aggregate results. History and exact session times remain private."))
-        } }, confirmButton = { TextButton({ onCreate(SocialIntent.CreateRoom(name, if (organization) RoomKind.ORGANIZATION else RoomKind.FRIENDS, 500, duration, consent)) },
+        } }, confirmButton = { TextButton({ onCreate(SocialIntent.CreateRoom(name, RoomKind.FRIENDS, 500, 25, consent)) },
             enabled = name.isNotBlank() && consent) { Text(copy.text("Utwórz", "Create")) } },
         dismissButton = { TextButton(onDismiss) { Text(copy.cancel) } })
 }
@@ -561,7 +535,7 @@ private fun CompanyJoinDialog(
     var nickname by remember { mutableStateOf("") }
     var jobTitle by remember { mutableStateOf("") }
     var consent by remember { mutableStateOf(false) }
-    var rankingOptIn by remember { mutableStateOf(false) }
+    var rankingOptIn by remember { mutableStateOf(true) }
     AlertDialog(onDismissRequest = onDismiss, title = { Text(copy.text("Dołącz do ${company.name}", "Join ${company.name}")) },
         text = { Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Text(copy.text(
@@ -581,15 +555,6 @@ private fun CompanyJoinDialog(
 }
 
 @Composable
-private fun JoinRoomDialog(copy: Copy, onDismiss: () -> Unit, onPreview: (String) -> Unit) {
-    var code by remember { mutableStateOf("") }
-    AlertDialog(onDismissRequest = onDismiss, title = { Text(copy.text("Dołącz kodem", "Join with a code")) },
-        text = { OutlinedTextField(code, { code = it }, label = { Text(copy.text("Kod zaproszenia", "Invitation code")) }, singleLine = true) },
-        confirmButton = { TextButton({ onPreview(code.trim()) }, enabled = code.isNotBlank()) { Text(copy.text("Zobacz zasady", "View room rules")) } },
-        dismissButton = { TextButton(onDismiss) { Text(copy.cancel) } })
-}
-
-@Composable
 private fun ConsentRow(checked: Boolean, onChange: (Boolean) -> Unit, text: String) {
     Row(Modifier.fillMaxWidth().clickable { onChange(!checked) }, verticalAlignment = Alignment.CenterVertically) {
         Checkbox(checked, onChange, modifier = Modifier.semantics { contentDescription = text })
@@ -601,12 +566,13 @@ fun socialMessage(code: String, copy: Copy): String = when (code) {
     "company_not_found" -> copy.text("Nie znaleziono wybranej firmy.", "The selected company was not found.")
     "company_not_selected" -> copy.text("Najpierw wybierz firmę.", "Choose a company first.")
     "invalid_job_title" -> copy.text("Wpisz prawidłowe stanowisko.", "Enter a valid job title.")
+    "invalid_company_name" -> copy.text("Nazwa firmy musi mieć od 2 do 80 znaków.", "Company name must be between 2 and 80 characters.")
     "invalid_endpoint" -> copy.text("Sprawdź adres usługi. Połączenie wymaga HTTPS.", "Check the service address. HTTPS is required.")
     "privacy_required" -> copy.text("Najpierw zapoznaj się z zasadami i zaakceptuj je.", "Please read and accept the privacy rules first.")
     "unauthorized", "invalid_token" -> copy.text("Połącz ponownie konto, aby kontynuować.", "Reconnect your account to continue.")
     "quiet_hours", "rate_limited", "nudge_declined", "nudges_disabled", "nudge_not_allowed" -> copy.text("Ta osoba nie przyjmuje teraz zaproszeń. Daj jej przestrzeń.", "This person isn't receiving nudges now. Give them some space.")
-    "room_closed" -> copy.text("Ten pokój jest zamknięty.", "This room is closed.")
-    "invalid_invitation", "not_found" -> copy.text("Nie znaleziono aktywnego zaproszenia lub pokoju.", "No active invitation or room was found.")
+    "room_closed" -> copy.text("Ten clan jest zamknięty.", "This clan is closed.")
+    "invalid_invitation", "not_found" -> copy.text("Nie znaleziono aktywnego zaproszenia lub clanu.", "No active invitation or clan was found.")
     "report_submitted" -> copy.text("Zgłoszenie zostało zapisane dla administratora usługi.", "Your report was saved for the service administrator.")
     "nudge_sent" -> copy.text("Zaproszenie wysłane.", "Nudge sent.")
     "account_deleted" -> copy.text("Konto usunięte. Lokalna historia została zachowana.", "Account deleted. Local history is safe.")

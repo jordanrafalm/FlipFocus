@@ -2,15 +2,12 @@ package pl.flipfocus.app
 
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
-import androidx.compose.animation.core.Spring
-import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.Orientation
-import androidx.compose.foundation.gestures.draggable
-import androidx.compose.foundation.gestures.rememberDraggableState
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -25,10 +22,8 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -37,19 +32,14 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.onSizeChanged
-import androidx.compose.foundation.layout.offset
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
-import kotlinx.coroutines.CoroutineStart
-import kotlinx.coroutines.launch
 import kotlin.math.abs
-import kotlin.math.roundToInt
 import pl.flipfocus.presentation.FocusScreen
 
 /** Overlay destinations with no VM-tracked state (safe local UI concern only, never session truth). */
@@ -171,9 +161,8 @@ fun BottomNavBar(current: AppDestination, copy: Copy, onSelect: (AppDestination)
 }
 
 /**
- * Hosts the active destination's content as a finger-tracking pager: the current page follows the drag
- * one-to-one while the neighbouring page slides in beside it. On release the pages settle (using the fling
- * velocity) onto the target or spring back. Tab taps animate the same way. Vertical drags are left alone.
+ * Hosts destinations with native pager gestures, so consecutive swipes are never blocked by the
+ * bottom-navigation animation or by external state taking a frame to catch up.
  */
 @Composable
 fun SwipeableDestinationHost(
@@ -182,85 +171,31 @@ fun SwipeableDestinationHost(
     modifier: Modifier = Modifier,
     content: @Composable (AppDestination) -> Unit,
 ) {
-    val scope = rememberCoroutineScope()
-    val offset = remember { Animatable(0f) }
-    var widthPx by remember { mutableStateOf(0f) }
-    var base by remember { mutableStateOf(destination) }
-    var incoming by remember { mutableStateOf<AppDestination?>(null) }
-    val settleSpec = spring<Float>(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = 380f)
+    val entries = AppDestination.entries
+    val pagerState = rememberPagerState(
+        initialPage = entries.indexOf(destination),
+        pageCount = { entries.size },
+    )
 
     LaunchedEffect(destination) {
-        // A previous transition may have been cancelled mid-flight by a rapid tab change, so re-derive from current state.
-        if (destination == base) {
-            if (offset.value != 0f) offset.animateTo(0f, settleSpec)
-            incoming = null
-            return@LaunchedEffect
-        }
-        val order = AppDestination.entries
-        val forward = order.indexOf(destination) > order.indexOf(base)
-        if (incoming != destination && offset.value != 0f && (offset.value < 0f) != forward) offset.snapTo(0f)
-        incoming = destination
-        offset.animateTo(if (forward) -widthPx else widthPx, settleSpec)
-        base = destination
-        incoming = null
-        offset.snapTo(0f)
-    }
-
-    val dragState = rememberDraggableState { delta ->
-        if (widthPx <= 0f || destination != base) return@rememberDraggableState
-        val current = offset.value
-        val raw = current + delta
-        val neighbor = when {
-            raw < 0f -> base.nextDestination()
-            raw > 0f -> base.previousDestination()
-            else -> null
-        }
-        incoming = neighbor
-        val next = if (neighbor == null) current + delta * 0.3f else raw
-        scope.launch(start = CoroutineStart.UNDISPATCHED) {
-            offset.snapTo(next.coerceIn(-widthPx, widthPx))
+        val page = entries.indexOf(destination)
+        if (pagerState.currentPage != page || pagerState.targetPage != page) {
+            pagerState.animateScrollToPage(page)
         }
     }
 
-    Box(
-        modifier = modifier.fillMaxSize()
-            .onSizeChanged { widthPx = it.width.toFloat() }
-            .draggable(
-                state = dragState,
-                orientation = Orientation.Horizontal,
-                onDragStopped = { velocity ->
-                    val target = incoming
-                    val current = offset.value
-                    val commit = target != null && widthPx > 0f && destination == base &&
-                        (abs(current) > widthPx * 0.07f || (abs(velocity) > 120f && velocity * current >= 0f && abs(current) > 4f))
-                    scope.launch {
-                        if (commit && target != null) {
-                            val end = if (current < 0f) -widthPx else widthPx
-                            offset.animateTo(end, settleSpec, initialVelocity = velocity)
-                            onNavigate(target)
-                        } else {
-                            offset.animateTo(0f, settleSpec, initialVelocity = velocity)
-                            if (destination == base) incoming = null
-                        }
-                    }
-                },
-            ),
-    ) {
-        Box(Modifier.fillMaxSize().background(FocusColors.background))
-        val pages = listOfNotNull(base, incoming)
-        pages.forEach { page ->
-            key(page) {
-                Box(
-                    Modifier.fillMaxSize().offset {
-                        val side = if (page == base) 0f else {
-                            if (AppDestination.entries.indexOf(page) > AppDestination.entries.indexOf(base)) widthPx else -widthPx
-                        }
-                        IntOffset((offset.value + side).roundToInt(), 0)
-                    },
-                ) {
-                    content(page)
-                }
-            }
+    LaunchedEffect(pagerState.settledPage) {
+        val settled = entries[pagerState.settledPage]
+        if (settled != destination) onNavigate(settled)
+    }
+
+    HorizontalPager(
+        state = pagerState,
+        modifier = modifier.fillMaxSize().background(FocusColors.background),
+        beyondViewportPageCount = 1,
+    ) { page ->
+        Box(Modifier.fillMaxSize()) {
+            content(entries[page])
         }
     }
 }

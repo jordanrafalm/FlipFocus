@@ -62,12 +62,21 @@ class SocialViewModel(
                 val companies = repository.searchCompanies(intent.endpoint, intent.query)
                 mutableState.update { it.copy(companies = companies, errorCode = null) }
             }
+            is SocialIntent.CreateCompany -> {
+                val connection = repository.createCompany(intent.name)
+                mutableState.update { it.copy(connection = connection, errorCode = null) }
+                refresh()
+            }
             is SocialIntent.ConnectCompany -> {
                 if (!intent.privacyAccepted) throw SocialException("privacy_required")
                 val connection = repository.connectCompany(intent.endpoint, intent.companyId, intent.nickname, intent.jobTitle,
                     intent.timezone, true, intent.companyRankingOptIn)
-                resetSessionSharing()
-                mutableState.value = SocialUiState(connection = connection, isLoading = false, isBusy = true)
+                if (state.value.connection == null) {
+                    resetSessionSharing()
+                    mutableState.value = SocialUiState(connection = connection, isLoading = false, isBusy = true)
+                } else {
+                    mutableState.update { it.copy(connection = connection, errorCode = null) }
+                }
                 refresh()
             }
             is SocialIntent.Connect -> {
@@ -88,7 +97,10 @@ class SocialViewModel(
             SocialIntent.DeleteAccount -> {
                 repository.deleteAccount()
                 resetSessionSharing()
-                mutableState.value = SocialUiState(isLoading = false)
+                mutableState.value = SocialUiState(
+                    isLoading = false,
+                    companies = state.value.companies,
+                )
                 emit(SocialEffect.Message("account_deleted"))
             }
             SocialIntent.Refresh -> if (state.value.connection != null) {
@@ -120,6 +132,11 @@ class SocialViewModel(
                 val profile = repository.updateProfile(intent.profile)
                 mutableState.update { it.copy(connection = it.connection?.copy(profile = profile)) }
                 publishPresence()
+                refresh()
+            }
+            is SocialIntent.SelectCompany -> {
+                val profile = repository.selectCompany(intent.companyId)
+                mutableState.update { it.copy(connection = it.connection?.copy(profile = profile)) }
                 refresh()
             }
             is SocialIntent.LinkEmailPassword -> {
@@ -186,8 +203,8 @@ class SocialViewModel(
             eligible?.forEach { roomId ->
                 if ((roomId to session.id) !in submitted) pending += Contribution(roomId, session.id, session.duration.minutes)
             }
-            val companyId = state.value.connection?.profile?.companyId
-            if (eligible != null && companyId != null && companyPending.none { it.sessionId == session.id }) {
+            val companies = state.value.connection?.profile?.let { companyIds(it) }.orEmpty()
+            if (eligible != null && companies.isNotEmpty() && companyPending.none { it.sessionId == session.id }) {
                 companyPending += CompanyContribution(session.id, session.duration.minutes)
                 saveCompanyOutbox()
             }
@@ -295,6 +312,9 @@ class SocialViewModel(
     }
     private fun emit(effect: SocialEffect) { effectChannel.trySend(effect) }
 }
+
+private fun companyIds(profile: SocialProfile): List<String> =
+    profile.companyMemberships.map { it.id }.ifEmpty { listOfNotNull(profile.companyId) }.distinct()
 
 /** Default outbox for previews/tests; production hosts provide a persistent-store-backed implementation. */
 class InMemorySocialOutboxStore : SocialOutboxStore {

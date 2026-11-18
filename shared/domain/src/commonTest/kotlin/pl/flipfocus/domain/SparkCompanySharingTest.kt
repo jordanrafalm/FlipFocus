@@ -20,11 +20,11 @@ class SparkCompanySharingTest {
     @Test
     fun companySearchIsCaseInsensitiveAndLocal() {
         assertEquals(listOf(Company("nvidia", "NVIDIA")), LocalCompanyDirectory.search(" nVid "))
-        assertEquals(LocalCompanyDirectory.all.sortedBy { it.name }.take(20), LocalCompanyDirectory.search(""))
+        assertEquals(LocalCompanyDirectory.all.sortedBy { it.name }, LocalCompanyDirectory.search(""))
     }
 
     @Test
-    fun emptyQueryBrowsesTheFullDirectoryImmediately() {
+    fun emptyQueryRespectsAnExplicitBrowseLimit() {
         val browsed = LocalCompanyDirectory.search("", limit = 5)
         assertEquals(5, browsed.size)
         assertEquals(browsed, browsed.sortedBy { it.name })

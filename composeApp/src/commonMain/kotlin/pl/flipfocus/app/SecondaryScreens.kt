@@ -66,7 +66,7 @@ fun HistoryScreen(state: FocusUiState, copy: Copy, onIntent: (FocusIntent) -> Un
 }
 
 @Composable
-fun SettingsScreen(state: FocusUiState, copy: Copy, onIntent: (FocusIntent) -> Unit, onSystemSettings: () -> Unit, modifier: Modifier = Modifier) {
+fun SettingsScreen(state: FocusUiState, copy: Copy, onIntent: (FocusIntent) -> Unit, modifier: Modifier = Modifier) {
     val settings = state.settings
     fun update(next: FocusSettings) = onIntent(FocusIntent.UpdateSettings(next))
     Column(modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = FocusSpace.page), verticalArrangement = Arrangement.spacedBy(16.dp)) {
@@ -86,17 +86,14 @@ fun SettingsScreen(state: FocusUiState, copy: Copy, onIntent: (FocusIntent) -> U
             }
         }
         FocusCard {
-            Text(copy.text("Dzień zalicza ukończona sesja trwająca co najmniej 15 minut.",
-                "A completed session of at least 15 minutes counts toward your streak."), color = FocusColors.muted, style = MaterialTheme.typography.bodySmall)
+            Text(copy.text("Każda ukończona sesja zalicza dzień w Twojej passie.",
+                "Every completed session counts toward your daily streak."), color = FocusColors.muted, style = MaterialTheme.typography.bodySmall)
         }
         SectionLabel(copy.text("PRYWATNOŚĆ", "PRIVACY"))
         FocusCard {
             Text(copy.text("Twoje skupienie należy do Ciebie.", "Your focus belongs to you."), style = MaterialTheme.typography.titleMedium)
-            Text(copy.text("Historia pozostaje na urządzeniu. Udostępnianie w pokojach jest osobne i dobrowolne.",
-                "Your history stays on this device. Sharing in rooms is separate and optional."), color = FocusColors.muted, style = MaterialTheme.typography.bodyMedium)
-            SettingsToggle(copy.text("Lokalne statystyki jakości", "Local quality counters"),
-                copy.text("Anonimowe liczniki zdarzeń. Bez wysyłania danych. Wyłączenie usuwa liczniki.",
-                    "Event counts only, never uploaded. Turning this off clears the counters."), settings.analyticsEnabled, onChange = { update(settings.copy(analyticsEnabled = it)) })
+            Text(copy.text("Historia pozostaje na urządzeniu. Udostępnianie w clanie jest osobne i dobrowolne.",
+                "Your history stays on this device. Sharing in a clan is separate and optional."), color = FocusColors.muted, style = MaterialTheme.typography.bodyMedium)
         }
         SectionLabel(copy.text("JĘZYK", "LANGUAGE"))
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -106,17 +103,7 @@ fun SettingsScreen(state: FocusUiState, copy: Copy, onIntent: (FocusIntent) -> U
                     modifier = Modifier.weight(1f).heightIn(min = 48.dp))
             }
         }
-        FocusCard {
-            Text(copy.text("Pomiar położenia", "Phone position"), style = MaterialTheme.typography.titleMedium)
-            Text(copy.text("Połóż telefon płasko, ekranem do dołu. Podczas sesji ekran nie wygasza się sam. Blokada lub zmiana aplikacji wstrzyma pomiar i uruchomi czas na powrót.",
-                "Lay your phone flat, screen-down. The display stays awake during a session. Locking your phone or switching apps pauses measurement and starts the return window."),
-                color = FocusColors.muted, style = MaterialTheme.typography.bodyMedium)
-            TextButton({ onIntent(FocusIntent.ReportMeasurementIssue) }, modifier = Modifier.heightIn(min = 48.dp)) {
-                Text(copy.text("Pomoc z pomiarem", "Measurement help"))
-            }
-            TextButton(onSystemSettings, modifier = Modifier.heightIn(min = 48.dp)) { Text(copy.text("Ustawienia urządzenia", "Device settings")) }
-        }
-        Text("FlipFocus · 0.1.1", style = MaterialTheme.typography.bodySmall, color = FocusColors.muted, modifier = Modifier.padding(bottom = 24.dp))
+        Text("FlipFocus · 1.0.0", style = MaterialTheme.typography.bodySmall, color = FocusColors.muted, modifier = Modifier.padding(bottom = 24.dp))
     }
 }
 

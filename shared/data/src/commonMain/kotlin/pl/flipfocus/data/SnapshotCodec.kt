@@ -69,7 +69,7 @@ private data class SnapshotDto(
 
 @Serializable
 private data class SettingsDto(
-    val graceSeconds: Int = 10, val minimumStreakMinutes: Int = 15,
+    val graceSeconds: Int = 10, val minimumStreakMinutes: Int = 1,
     val soundEnabled: Boolean = true, val hapticsEnabled: Boolean = true, val silentModeEnabled: Boolean = false,
     val remindersEnabled: Boolean = false, val reminderHour: Int = 11, val analyticsEnabled: Boolean = false,
     val liveStatusEnabled: Boolean = false, val leaderboardEnabled: Boolean = false,

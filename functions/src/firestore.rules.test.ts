@@ -5,7 +5,7 @@ import {
   RulesTestEnvironment,
 } from "@firebase/rules-unit-testing";
 import { readFileSync } from "fs";
-import { setDoc, doc, getDoc, deleteDoc } from "firebase/firestore";
+import { setDoc, doc, getDoc, deleteDoc, collectionGroup, getDocs, query, where } from "firebase/firestore";
 
 /**
  * Firestore rules tests against the local emulator (never a real project). Requires the
@@ -69,6 +69,32 @@ describeIfEmulator("firestore.rules", () => {
     });
     const completionRef = doc(context.firestore(), "companies/other-co/completions/user-1_session-1");
     await assertFails(setDoc(completionRef, { uid, week: "2026-09-21", minutes: 25, epochMillis: Date.now() }));
+  });
+
+  it("allows users to query only their own room memberships by collection group", async () => {
+    const owner = testEnv.authenticatedContext("user-1");
+    const coworker = testEnv.authenticatedContext("user-2");
+    await testEnv.withSecurityRulesDisabled(async (admin) => {
+      await setDoc(doc(admin.firestore(), "rooms/room-1/members/user-1"), {
+        uid: "user-1", role: "owner", nickname: "One",
+      });
+      await setDoc(doc(admin.firestore(), "rooms/room-2/members/user-2"), {
+        uid: "user-2", role: "participant", nickname: "Two",
+      });
+    });
+
+    await assertSucceeds(getDocs(query(
+      collectionGroup(owner.firestore(), "members"),
+      where("uid", "==", "user-1"),
+    )));
+    await assertFails(getDocs(query(
+      collectionGroup(owner.firestore(), "members"),
+      where("uid", "==", "user-2"),
+    )));
+    await assertSucceeds(getDocs(query(
+      collectionGroup(coworker.firestore(), "members"),
+      where("uid", "==", "user-2"),
+    )));
   });
 
   it("rejects out-of-range minutes and mismatched-owner completion ids", async () => {
